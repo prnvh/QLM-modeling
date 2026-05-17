@@ -1,0 +1,27 @@
+# Stage 1 local smoke / dev defaults. Tune for your machine before long runs.
+
+seed: 42
+device: cpu
+
+paths:
+  data_dir: ./data
+  artifacts_dir: ./artifacts
+  checkpoints_dir: ./artifacts/checkpoints
+
+model:
+  num_traces: 1024
+  active_traces: 32
+  trace_dim: 32
+  num_basins: 32
+  relation_channels: 4
+  settling_steps: 3
+
+training:
+  batch_size: 16
+  max_seq_len: 64
+  lr: 0.001
+  grad_clip: 1.0
+  losses:
+    reconstruction: 1.0
+    sparsity: 0.01
+    stability: 0.05
