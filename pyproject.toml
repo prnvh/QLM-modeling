@@ -28,3 +28,6 @@ extras = [
 where = ["."]
 include = ["lmf*"]
 namespaces = true
+
+[tool.setuptools.package-data]
+lmf = ["infra/config/*.yaml"]
