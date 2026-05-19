@@ -107,3 +107,34 @@ router, and active region. Add `--trace` for routing logs on stderr.
 ```powershell
 py lmf/core/dmf/trace_router.py text "Help bank!" --num-traces 64 --top-k 8 --cue-dim 16 --trace
 ```
+
+## Field loop (Commit B1)
+
+After the active region is built, the **field loop** runs a few settling steps on
+that small working set. It is wrapped as one `FieldLoop` `nn.Module` so PyTorch
+can find, train, and save all field weights together.
+
+Inside `FieldLoop`, these submodules are registered by name:
+
+- `context_op` — cue summary pushes on traces and basins (not token attention)
+- `binding_layer` — soft edges between active traces (constraints, not value mixing)
+- `binding_forces` — turns those edges into forces
+- `interference_layer` — binding-gated compatibility / conflict terms
+- `settling` — damped update of trace amplitudes and basin pressures
+
+`lmf/core/field/loop.py` owns them as `self.context_op`, `self.binding_layer`, etc.
+That fixes the case where field code existed but optimizers skipped it because
+parameters were not part of `model.parameters()`.
+
+```powershell
+py lmf/core/field/loop.py text "Help bank!" --top-k 8 --cue-dim 16 --settling-steps 3 --trace
+```
+
+Registration and checkpoint tests for B2 live in `tests/test_field_loop_registration.py`.
+They check that `binding_layer`, `binding_forces`, and `interference_layer` appear in
+`named_parameters` and `state_dict`, survive `torch.save` / `torch.load`, and stay
+attached when `FieldLoop` is nested inside a parent model.
+
+```powershell
+py -m pytest tests/test_field_loop_registration.py -q
+```
