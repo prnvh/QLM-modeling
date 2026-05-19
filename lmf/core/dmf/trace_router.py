@@ -18,6 +18,11 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from lmf.core.dmf.sparsity import SparsityReport, topk_trace_routing  # noqa: E402
+from lmf.core.support.human_report import (  # noqa: E402
+    PipelineInspection,
+    format_routing_section,
+    tensors_to_ranked_lists,
+)
 from lmf.core.dmf.trace_bank import TraceBank, build_trace_bank  # noqa: E402
 from lmf.core.input.cue_encoder import CueEncoder, CueEncoderConfig, encode_text  # noqa: E402
 from lmf.core.input.cue_packet import CuePacket  # noqa: E402
@@ -314,7 +319,12 @@ def _parse_cli_args() -> argparse.Namespace:
         help="Similarity function for cue-to-key comparison.",
     )
     parser.add_argument("--seed", type=int, default=7, help="Initialization seed.")
-    parser.add_argument("--trace", action="store_true", help="Print human-readable routing logs.")
+    parser.add_argument("--trace", action="store_true", help="Print routing debug logs to stderr.")
+    parser.add_argument(
+        "--numbers",
+        action="store_true",
+        help="Print raw tensor-style output instead of the readable table.",
+    )
     return parser.parse_args()
 
 
@@ -335,13 +345,40 @@ def main() -> None:
         trace=args.trace,
     )
 
-    _safe_print(f"Input: {text}")
-    _safe_print(f"Active trace ids: {routing.trace_ids.tolist()}")
-    _safe_print(f"Active scores: {_preview_tensor(routing.scores, limit=min(args.top_k, 8))}")
-    _safe_print(f"Sparsity: {routing.sparsity.active_traces}/{routing.sparsity.num_traces}")
-    _safe_print(f"Trace content shape: {list(active_region.trace_content.shape)}")
-    _safe_print(f"Trace amp: {_preview_tensor(active_region.trace_amp, limit=min(args.top_k, 8))}")
-    _safe_print(f"Cue drive: {_preview_tensor(active_region.cue_drive, limit=min(args.top_k, 8))}")
+    if args.numbers:
+        _safe_print(f"Input: {text}")
+        _safe_print(f"Active trace ids: {routing.trace_ids.tolist()}")
+        _safe_print(f"Active scores: {_preview_tensor(routing.scores, limit=min(args.top_k, 8))}")
+        _safe_print(f"Sparsity: {routing.sparsity.active_traces}/{routing.sparsity.num_traces}")
+        _safe_print(f"Trace content shape: {list(active_region.trace_content.shape)}")
+        _safe_print(f"Trace amp: {_preview_tensor(active_region.trace_amp, limit=min(args.top_k, 8))}")
+        _safe_print(f"Cue drive: {_preview_tensor(active_region.cue_drive, limit=min(args.top_k, 8))}")
+        return
+
+    trace_ids, match_scores, activations, cue_drives = tensors_to_ranked_lists(
+        routing.trace_ids,
+        routing.scores,
+        active_region.trace_amp,
+        active_region.cue_drive,
+    )
+    report = format_routing_section(
+        PipelineInspection(
+            input_text=text,
+            tokens=[],
+            token_rows=[],
+            routing_mode=args.routing_mode,
+            score_mode=args.score_mode,
+            num_traces=args.num_traces,
+            top_k=args.top_k,
+            trace_ids=trace_ids,
+            match_scores=match_scores,
+            activations_before=activations,
+            cue_drives=cue_drives,
+        )
+    )
+    _safe_print(report)
+    _safe_print("\nFor full pipeline (tokens + binding + settling), run:")
+    _safe_print('  py lmf/infra/scripts/inspect_pipeline.py text "' + text + '"')
 
 
 __all__ = [

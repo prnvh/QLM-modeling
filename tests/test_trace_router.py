@@ -208,7 +208,7 @@ def test_trace_router_file_can_be_run_directly() -> None:
         text=True,
     )
 
-    assert "Input: Help bank!" in result.stdout
-    assert "Active trace ids:" in result.stdout
-    assert "Sparsity: 5/24" in result.stdout
+    assert "SPARSE ROUTING" in result.stdout
+    assert "trace_" in result.stdout
+    assert "kept the best 5" in result.stdout
     assert "trace_router.forward" in result.stderr

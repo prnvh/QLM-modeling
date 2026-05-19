@@ -101,12 +101,20 @@ The **active region** (`lmf/core/dmf/active_region.py`) is the working set: whic
 trace ids were picked, their content, how active they are, and how hard the cue
 is pushing them. Only those rows are gathered from the bank; the rest stay idle.
 
-One command runs the full path from text through tokenizer, cue encoder, bank,
-router, and active region. Add `--trace` for routing logs on stderr.
+For **readable manual inspection** (recommended), use the pipeline report. It
+prints tokens, a ranked table of which trace slots were selected, binding links,
+and how activations changed after settling — not raw tensor dumps.
 
 ```powershell
-py lmf/core/dmf/trace_router.py text "Help bank!" --num-traces 64 --top-k 8 --cue-dim 16 --trace
+py lmf/infra/scripts/inspect_pipeline.py text "Help me withdraw money from the bank"
 ```
+
+Use `--routing-only` to stop after sparse routing. Use `--top-k 6 --num-traces 32`
+to control how many slots wake up.
+
+Lower-level CLIs still exist (`trace_router.py`, `loop.py`). Add `--numbers` on
+`trace_router.py` if you want the old numeric output. Add `--trace` on any script
+for debug logs on stderr.
 
 ## Field loop (Commits B1 and B2)
 
