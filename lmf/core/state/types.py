@@ -16,6 +16,8 @@ class CuePacket:
     mask: Tensor | None = None
     positions: Tensor | None = None
     pooled: Tensor | None = None
+    token_ids: Tensor | None = None
+    special_token_ids: tuple[int, int, int, int, int] | None = None
 
 
 @dataclass
@@ -27,6 +29,11 @@ class ActiveRegion:
     trace_amp: Tensor
     cue_drive: Tensor
     mask: Tensor | None = None
+    source_cue_id: Tensor | None = None
+    source_token_id: Tensor | None = None
+    source_span: Tensor | None = None
+    cue_type: Tensor | None = None
+    normalized_cue_ids: Tensor | None = None
 
 
 @dataclass

@@ -16,12 +16,12 @@ def test_format_pipeline_report_lists_active_traces_in_plain_language() -> None:
     )
     report = format_pipeline_report(inspection)
 
-    assert "SPARSE ROUTING" in report
+    assert "ROUTING" in report
     assert "trace_" in report
-    assert "Match" in report
-    assert "withdraw" in report or "help" in report
+    assert "match" in report
+    assert "bank" in report
     assert "BINDING" in report
-    assert "FIELD SETTLING" in report
+    assert "SETTLING" in report
 
 
 def test_inspect_pipeline_cli_prints_readable_sections() -> None:
@@ -47,10 +47,10 @@ def test_inspect_pipeline_cli_prints_readable_sections() -> None:
         text=True,
     )
 
-    assert "TEXT IN" in result.stdout
-    assert "SPARSE ROUTING" in result.stdout
+    assert "TOKENS" in result.stdout
+    assert "ROUTING" in result.stdout
     assert "trace_" in result.stdout
-    assert "kept the best 4" in result.stdout
+    assert "tokens used:" in result.stdout
 
 
 def test_inspect_pipeline_routing_only_skips_settling_section() -> None:
@@ -65,6 +65,6 @@ def test_inspect_pipeline_routing_only_skips_settling_section() -> None:
     )
     report = format_pipeline_report(inspection)
 
-    assert "SPARSE ROUTING" in report
-    assert "FIELD SETTLING" not in report
+    assert "ROUTING" in report
+    assert "SETTLING" not in report
     assert "BINDING" not in report

@@ -208,3 +208,42 @@ logging without a full trainer run.
 py lmf/training/module_diagnostics.py text "Help bank!" --top-k 8 --cue-dim 16 --trace
 py -m pytest tests/test_module_diagnostics.py -q
 ```
+
+## Cue provenance through routing (Commit C1)
+
+Before C1, sparse routing only told you *which* trace slots woke up. It did
+not record *why* — which input cue or token drove each selection. That is a
+problem for binding supervision: to learn whether two active traces should
+link, the system needs to know their source tokens, positions, and cue types.
+
+C1 attaches provenance at routing time and copies it onto each active trace.
+Five fields ride along on `RoutingResult` and `ActiveRegion`:
+
+- `source_cue_id` — sequence index of the winning cue (`-1` for pooled mode)
+- `source_token_id` — vocabulary id of that cue's token (`-1` when pooled)
+- `source_span` — inclusive token span `[start, end]` for the source cue
+- `cue_type` — integer code (`token`, `bos`, `eos`, `pooled`, etc.)
+- `normalized_cue_ids` — binding-stable cue id (content and special tokens
+  keep their vocab id; pooled uses `-1`)
+
+In **max_token** mode the router already scores every token cue against every
+trace key. C1 keeps the argmax position per trace before top-k selection, then
+gathers token ids, cue types, and spans for the traces that survive. In
+**pooled** mode the whole sentence cue drives all selections, so provenance
+marks `cue_type=pooled` and span covers the active token range.
+
+The cue encoder now puts `token_ids` on every `CuePacket`. The text helper
+also stores `special_token_ids` from the vocabulary so cue types classify
+correctly. Routing fails loudly if `token_ids` are missing — no silent empty
+provenance.
+
+Helpers live in `lmf/core/dmf/cue_provenance.py`. Human-readable reports and
+the trace-router CLI show provenance columns (Src cue, Token id, Span, etc.).
+Add `--trace` for routing logs that include a provenance preview on stderr.
+
+Simple verification:
+
+```powershell
+py lmf/core/dmf/trace_router.py text "Help bank!" --top-k 5 --trace
+py -m pytest tests/test_cue_provenance.py tests/test_trace_router.py -q
+```

@@ -7,6 +7,7 @@ import logging
 import torch
 from torch import Tensor, nn
 
+from lmf.core.dmf.cue_provenance import preview_provenance_row
 from lmf.core.dmf.trace_bank import TraceBank
 from lmf.core.dmf.trace_router import RoutingResult
 from lmf.core.input.cue_packet import CuePacket
@@ -24,7 +25,8 @@ def build_active_region(
     """Materialize the blue active trace region from a routing result.
 
     The full trace bank is never copied. Only the selected trace rows are
-    gathered into the returned packet.
+    gathered into the returned packet. Source metadata from routing is copied
+    onto each active trace for later binding supervision.
     """
 
     _ = cue_packet
@@ -43,6 +45,7 @@ def build_active_region(
 
     _log_active_region(
         trace_ids=trace_ids,
+        routing=routing,
         batch_size=batch_size,
         top_k=top_k,
     )
@@ -53,6 +56,11 @@ def build_active_region(
         trace_amp=trace_amp,
         cue_drive=cue_drive,
         mask=mask,
+        source_cue_id=routing.source_cue_id,
+        source_token_id=routing.source_token_id,
+        source_span=routing.source_span,
+        cue_type=routing.cue_type,
+        normalized_cue_ids=routing.normalized_cue_ids,
     )
 
 
@@ -74,16 +82,32 @@ def _normalize_trace_ids(trace_ids: Tensor, *, num_traces: int) -> Tensor:
 def _log_active_region(
     *,
     trace_ids: Tensor,
+    routing: RoutingResult,
     batch_size: int,
     top_k: int,
 ) -> None:
-    if not LOGGER.isEnabledFor(logging.DEBUG):
+    if not LOGGER.isEnabledFor(logging.INFO):
         return
-    LOGGER.debug(
-        "active_region.build batch_size=%s top_k=%s trace_ids=%s",
+
+    rows: list[str] = []
+    for index in range(min(top_k, 8)):
+        span = routing.source_span[0, index].detach().cpu().tolist()
+        rows.append(
+            preview_provenance_row(
+                source_cue_id=int(routing.source_cue_id[0, index].item()),
+                source_token_id=int(routing.source_token_id[0, index].item()),
+                source_span=(int(span[0]), int(span[1])),
+                cue_type=int(routing.cue_type[0, index].item()),
+                normalized_cue_id=int(routing.normalized_cue_ids[0, index].item()),
+            )
+        )
+
+    LOGGER.info(
+        "active_region.build batch_size=%s top_k=%s trace_ids=%s provenance=%s",
         batch_size,
         top_k,
         trace_ids.detach().cpu().tolist(),
+        " | ".join(rows),
     )
 
 

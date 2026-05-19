@@ -22,6 +22,7 @@ from lmf.core.input.tokenizer import inspect_text  # noqa: E402
 from lmf.core.support.human_report import (  # noqa: E402
     PipelineInspection,
     format_pipeline_report,
+    resolve_source_tokens,
     tensors_to_ranked_lists,
 )
 
@@ -51,11 +52,18 @@ def inspect_pipeline(
         trace=False,
     )
 
-    trace_ids, match_scores, activations_before, cue_drives = tensors_to_ranked_lists(
-        routing.trace_ids,
-        routing.scores,
-        active_region.trace_amp,
-        active_region.cue_drive,
+    trace_ids, match_scores, activations_before, cue_drives, source_cue_ids, source_token_ids, source_spans, cue_types, normalized = (
+        tensors_to_ranked_lists(
+            routing.trace_ids,
+            routing.scores,
+            active_region.trace_amp,
+            active_region.cue_drive,
+            source_cue_id=routing.source_cue_id,
+            source_token_id=routing.source_token_id,
+            source_span=routing.source_span,
+            cue_type=routing.cue_type,
+            normalized_cue_ids=routing.normalized_cue_ids,
+        )
     )
 
     field_output = None
@@ -89,6 +97,12 @@ def inspect_pipeline(
         }
         activations_after = [after_by_id[trace_id] for trace_id in trace_ids]
 
+    source_tokens = resolve_source_tokens(
+        list(token_report["token_ids"]),  # type: ignore[arg-type]
+        source_cue_ids,
+        cue_types,
+    )
+
     return PipelineInspection(
         input_text=text,
         tokens=list(token_report["tokens"]),  # type: ignore[arg-type]
@@ -101,6 +115,12 @@ def inspect_pipeline(
         match_scores=match_scores,
         activations_before=activations_before,
         cue_drives=cue_drives,
+        source_cue_ids=source_cue_ids,
+        source_token_ids=source_token_ids,
+        source_tokens=source_tokens,
+        source_spans=source_spans,
+        cue_types=cue_types,
+        normalized_cue_ids=normalized,
         field_output=field_output,
         activations_after=activations_after,
     )

@@ -17,15 +17,24 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from lmf.core.dmf.cue_provenance import (  # noqa: E402
+    SpecialTokenIds,
+    TraceProvenance,
+    build_trace_provenance,
+    classify_cue_types,
+    preview_provenance_row,
+)
 from lmf.core.dmf.sparsity import SparsityReport, topk_trace_routing  # noqa: E402
 from lmf.core.support.human_report import (  # noqa: E402
     PipelineInspection,
     format_routing_section,
+    resolve_source_tokens,
     tensors_to_ranked_lists,
 )
 from lmf.core.dmf.trace_bank import TraceBank, build_trace_bank  # noqa: E402
 from lmf.core.input.cue_encoder import CueEncoder, CueEncoderConfig, encode_text  # noqa: E402
 from lmf.core.input.cue_packet import CuePacket  # noqa: E402
+from lmf.core.input.tokenizer import inspect_text  # noqa: E402
 from lmf.core.state.types import ActiveRegion  # noqa: E402
 
 LOGGER = logging.getLogger(__name__)
@@ -67,6 +76,30 @@ def _preview_int_rows(values: Tensor, *, limit: int) -> str:
     return "[" + ", ".join(parts) + suffix + "]"
 
 
+def _preview_provenance_rows(provenance: TraceProvenance, *, limit: int) -> str:
+    if limit < 0:
+        raise ValueError("provenance preview limit must be non-negative.")
+    batch_size, top_k = provenance.source_cue_id.shape
+    if batch_size == 0 or top_k == 0:
+        return "[]"
+    rows: list[str] = []
+    count = min(limit, top_k)
+    for index in range(count):
+        span = provenance.source_span[0, index].detach().cpu().tolist()
+        rows.append(
+            preview_provenance_row(
+                source_cue_id=int(provenance.source_cue_id[0, index].item()),
+                source_token_id=int(provenance.source_token_id[0, index].item()),
+                source_span=(int(span[0]), int(span[1])),
+                cue_type=int(provenance.cue_type[0, index].item()),
+                normalized_cue_id=int(provenance.normalized_cue_ids[0, index].item()),
+            )
+        )
+    if top_k > count:
+        rows.append(f"... (+{top_k - count})")
+    return "[" + "; ".join(rows) + "]"
+
+
 @dataclass
 class TraceRouterConfig:
     """Configuration for sparse cue-to-trace routing."""
@@ -98,12 +131,24 @@ class RoutingResult:
     top_k: int
     num_traces: int
     sparsity: SparsityReport
+    source_cue_id: Tensor
+    source_token_id: Tensor
+    source_span: Tensor
+    cue_type: Tensor
+    normalized_cue_ids: Tensor
 
     def __post_init__(self) -> None:
         if self.trace_ids.shape != self.scores.shape:
             raise ValueError("trace_ids and scores must have the same shape.")
         if self.trace_ids.dim() != 2:
             raise ValueError("trace_ids must have shape [batch, top_k].")
+        TraceProvenance(
+            source_cue_id=self.source_cue_id,
+            source_token_id=self.source_token_id,
+            source_span=self.source_span,
+            cue_type=self.cue_type,
+            normalized_cue_ids=self.normalized_cue_ids,
+        )
 
 
 class TraceRouter(nn.Module):
@@ -129,7 +174,7 @@ class TraceRouter(nn.Module):
         if cues.shape[-1] != bank_state.keys.shape[-1]:
             raise ValueError("cue width must match trace key width.")
 
-        scores = self._batch_trace_scores(
+        scores, source_cue_ids_per_trace = self._batch_trace_scores(
             cues=cues,
             mask=mask,
             keys=bank_state.keys,
@@ -137,6 +182,13 @@ class TraceRouter(nn.Module):
             pooled=cue_packet.pooled,
         )
         trace_ids, top_scores = topk_trace_routing(scores, top_k=self.config.top_k)
+        provenance = self._build_provenance(
+            cue_packet=cue_packet,
+            cues=cues,
+            mask=mask,
+            trace_ids=trace_ids,
+            source_cue_ids_per_trace=source_cue_ids_per_trace,
+        )
         sparsity = SparsityReport.from_routing(
             batch_size=scores.shape[0],
             num_traces=bank_state.num_traces,
@@ -153,6 +205,7 @@ class TraceRouter(nn.Module):
             active_fraction=f"{sparsity.active_fraction:.4f}",
             trace_ids=_preview_int_rows(trace_ids, limit=self.config.trace_limit),
             scores=_preview_tensor(top_scores, limit=self.config.trace_limit),
+            provenance=_preview_provenance_rows(provenance, limit=self.config.trace_limit),
         )
 
         return RoutingResult(
@@ -162,6 +215,11 @@ class TraceRouter(nn.Module):
             top_k=trace_ids.shape[-1],
             num_traces=bank_state.num_traces,
             sparsity=sparsity,
+            source_cue_id=provenance.source_cue_id,
+            source_token_id=provenance.source_token_id,
+            source_span=provenance.source_span,
+            cue_type=provenance.cue_type,
+            normalized_cue_ids=provenance.normalized_cue_ids,
         )
 
     def _batch_trace_scores(
@@ -172,20 +230,92 @@ class TraceRouter(nn.Module):
         keys: Tensor,
         threshold: Tensor,
         pooled: Tensor | None,
-    ) -> Tensor:
+    ) -> tuple[Tensor, Tensor | None]:
         if self.config.routing_mode == "pooled":
             cue_vectors = self._resolve_pooled_cues(cues=cues, mask=mask, pooled=pooled)
             token_scores = self._pairwise_scores(cue_vectors, keys)
+            scores = token_scores
+            source_cue_ids_per_trace = None
         else:
             token_scores = self._pairwise_scores(cues, keys)
             token_scores = token_scores.masked_fill(~mask.unsqueeze(-1), float("-inf"))
+            scores, source_cue_ids_per_trace = token_scores.max(dim=1)
 
-        if self.config.routing_mode == "max_token":
-            scores, _ = token_scores.max(dim=1)
-        else:
-            scores = token_scores
+        return scores - threshold.unsqueeze(0), source_cue_ids_per_trace
 
-        return scores - threshold.unsqueeze(0)
+    def _build_provenance(
+        self,
+        *,
+        cue_packet: CuePacket,
+        cues: Tensor,
+        mask: Tensor,
+        trace_ids: Tensor,
+        source_cue_ids_per_trace: Tensor | None,
+    ) -> TraceProvenance:
+        token_ids = self._normalize_token_ids(cue_packet, cues)
+        positions = self._normalize_positions(cue_packet, cues)
+        special = self._resolve_special_token_ids(cue_packet)
+        cue_types_per_position = classify_cue_types(token_ids, special)
+
+        if self.config.routing_mode == "pooled":
+            return build_trace_provenance(
+                trace_ids=trace_ids,
+                source_cue_ids_per_trace=trace_ids.new_zeros(trace_ids.shape[0], trace_ids.shape[1]),
+                token_ids=token_ids,
+                positions=positions,
+                mask=mask,
+                cue_types_per_position=cue_types_per_position,
+                routing_mode="pooled",
+            )
+
+        if source_cue_ids_per_trace is None:
+            raise RuntimeError("max_token routing must provide per-trace source cue ids.")
+
+        return build_trace_provenance(
+            trace_ids=trace_ids,
+            source_cue_ids_per_trace=source_cue_ids_per_trace,
+            token_ids=token_ids,
+            positions=positions,
+            mask=mask,
+            cue_types_per_position=cue_types_per_position,
+            routing_mode="max_token",
+        )
+
+    def _normalize_token_ids(self, cue_packet: CuePacket, cues: Tensor) -> Tensor:
+        if cue_packet.token_ids is None:
+            raise ValueError("cue_packet.token_ids is required to attach trace provenance.")
+        token_ids = cue_packet.token_ids
+        if token_ids.dim() == 1:
+            token_ids = token_ids.unsqueeze(0)
+        if token_ids.shape != cues.shape[:2]:
+            raise ValueError("cue_packet.token_ids must match cue batch/sequence shape.")
+        if token_ids.dtype not in (torch.int32, torch.int64):
+            raise ValueError("cue_packet.token_ids must be an integer tensor.")
+        return token_ids.long()
+
+    def _normalize_positions(self, cue_packet: CuePacket, cues: Tensor) -> Tensor:
+        if cue_packet.positions is not None:
+            positions = cue_packet.positions
+            if positions.dim() == 1:
+                positions = positions.unsqueeze(0)
+            if positions.shape != cues.shape[:2]:
+                raise ValueError("cue_packet.positions must match cue batch/sequence shape.")
+            return positions.long()
+
+        seq_len = cues.shape[1]
+        return torch.arange(seq_len, device=cues.device).unsqueeze(0).expand(cues.shape[0], -1)
+
+    def _resolve_special_token_ids(self, cue_packet: CuePacket) -> SpecialTokenIds:
+        if cue_packet.special_token_ids is not None:
+            pad_id, unk_id, mask_id, bos_id, eos_id = cue_packet.special_token_ids
+            return SpecialTokenIds(
+                pad_id=pad_id,
+                unk_id=unk_id,
+                mask_id=mask_id,
+                bos_id=bos_id,
+                eos_id=eos_id,
+            )
+        return SpecialTokenIds(pad_id=0, unk_id=1, mask_id=2, bos_id=3, eos_id=4)
 
     def _resolve_pooled_cues(
         self,
@@ -355,17 +485,27 @@ def main() -> None:
         _safe_print(f"Cue drive: {_preview_tensor(active_region.cue_drive, limit=min(args.top_k, 8))}")
         return
 
-    trace_ids, match_scores, activations, cue_drives = tensors_to_ranked_lists(
-        routing.trace_ids,
-        routing.scores,
-        active_region.trace_amp,
-        active_region.cue_drive,
+    trace_ids, match_scores, activations, cue_drives, source_cue_ids, source_token_ids, source_spans, cue_types, normalized = (
+        tensors_to_ranked_lists(
+            routing.trace_ids,
+            routing.scores,
+            active_region.trace_amp,
+            active_region.cue_drive,
+            source_cue_id=routing.source_cue_id,
+            source_token_id=routing.source_token_id,
+            source_span=routing.source_span,
+            cue_type=routing.cue_type,
+            normalized_cue_ids=routing.normalized_cue_ids,
+        )
     )
+    token_report = inspect_text(text)
+    token_rows = list(token_report["token_ids"])  # type: ignore[arg-type]
+    source_tokens = resolve_source_tokens(token_rows, source_cue_ids, cue_types)
     report = format_routing_section(
         PipelineInspection(
             input_text=text,
-            tokens=[],
-            token_rows=[],
+            tokens=list(token_report["tokens"]),  # type: ignore[arg-type]
+            token_rows=token_rows,
             routing_mode=args.routing_mode,
             score_mode=args.score_mode,
             num_traces=args.num_traces,
@@ -374,11 +514,15 @@ def main() -> None:
             match_scores=match_scores,
             activations_before=activations,
             cue_drives=cue_drives,
+            source_cue_ids=source_cue_ids,
+            source_token_ids=source_token_ids,
+            source_tokens=source_tokens,
+            source_spans=source_spans,
+            cue_types=cue_types,
+            normalized_cue_ids=normalized,
         )
     )
     _safe_print(report)
-    _safe_print("\nFor full pipeline (tokens + binding + settling), run:")
-    _safe_print('  py lmf/infra/scripts/inspect_pipeline.py text "' + text + '"')
 
 
 __all__ = [

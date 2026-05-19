@@ -172,7 +172,13 @@ class CueEncoder(nn.Module):
             pooled=_preview_tensor(pooled, limit=self.config.trace_limit),
         )
 
-        return CuePacket(cues=cues, mask=mask, positions=positions, pooled=pooled)
+        return CuePacket(
+            cues=cues,
+            mask=mask,
+            positions=positions,
+            pooled=pooled,
+            token_ids=input_ids,
+        )
 
     def _normalize_input_ids(self, input_ids: Tensor) -> Tensor:
         if input_ids.dim() == 1:
@@ -244,7 +250,21 @@ def encode_text(
     encoder.eval()
     with torch.no_grad():
         packet = encoder(torch.tensor(ids, dtype=torch.long))
-    return vocab, ids, packet
+    special = (
+        vocab.pad_id,
+        vocab.unk_id,
+        vocab.mask_id,
+        vocab.bos_id,
+        vocab.eos_id,
+    )
+    return vocab, ids, CuePacket(
+        cues=packet.cues,
+        mask=packet.mask,
+        positions=packet.positions,
+        pooled=packet.pooled,
+        token_ids=packet.token_ids,
+        special_token_ids=special,
+    )
 
 
 def _configure_logging(*, trace: bool) -> None:
@@ -305,6 +325,7 @@ def main() -> None:
     _safe_print(f"Cue shape: {list(packet.cues.shape)}")
     _safe_print(f"Mask: {packet.mask.int().tolist() if packet.mask is not None else None}")
     _safe_print(f"Positions: {packet.positions.tolist() if packet.positions is not None else None}")
+    _safe_print(f"Token IDs: {packet.token_ids.tolist() if packet.token_ids is not None else None}")
     _safe_print(f"First cue: {_preview_tensor(first_row, limit=min(args.cue_dim, 8))}")
     _safe_print(f"Pooled cue: {_preview_tensor(packet.pooled[0], limit=min(args.cue_dim, 8))}")
 
