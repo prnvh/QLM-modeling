@@ -67,3 +67,43 @@ Simple run command:
 ```powershell
 py lmf/core/input/cue_encoder.py text "Help bank!" --cue-dim 6 --trace
 ```
+
+## Trace bank, router, and active region
+
+After cues are built, the memory layer starts. A **trace bank** is a fixed set of
+learnable memory slots. Nothing is labeled by hand (no “slot 3 means bank”).
+Training is meant to shape what each slot stores.
+
+Each slot has four learned parts: a **key** (does this cue match me?), **content**
+(what this slot holds), **threshold** (how strong the match must be), and
+**decay** (how fast the slot fades). Keys are compared to cues; content is what
+gets passed on when the slot is selected.
+
+The bank lives in `lmf/core/dmf/trace_bank.py`. You can inspect it alone with a
+fixed seed. `key_dim` should match the cue encoder width. Stage 1 defaults live
+in `lmf/infra/config/stage1_local.yaml`.
+
+```powershell
+py lmf/core/dmf/trace_bank.py inspect --num-traces 16 --key-dim 8 --content-dim 8 --trace
+```
+
+The system must not wake up the whole bank on every step. The **trace router**
+(`lmf/core/dmf/trace_router.py`) scores cues against trace keys, applies each
+trace’s threshold, and keeps only the best few matches. That is memory lookup,
+not attention over every token pair.
+
+You can route from the strongest token cue in the sentence (`max_token`) or from
+one pooled sentence cue (`pooled`). Similarity can be dot product or cosine.
+`lmf/core/dmf/sparsity.py` holds the small top-k helper and a simple report of
+how much of the bank stayed inactive.
+
+The **active region** (`lmf/core/dmf/active_region.py`) is the working set: which
+trace ids were picked, their content, how active they are, and how hard the cue
+is pushing them. Only those rows are gathered from the bank; the rest stay idle.
+
+One command runs the full path from text through tokenizer, cue encoder, bank,
+router, and active region. Add `--trace` for routing logs on stderr.
+
+```powershell
+py lmf/core/dmf/trace_router.py text "Help bank!" --num-traces 64 --top-k 8 --cue-dim 16 --trace
+```
