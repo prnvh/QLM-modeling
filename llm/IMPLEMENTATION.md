@@ -108,33 +108,95 @@ router, and active region. Add `--trace` for routing logs on stderr.
 py lmf/core/dmf/trace_router.py text "Help bank!" --num-traces 64 --top-k 8 --cue-dim 16 --trace
 ```
 
-## Field loop (Commit B1)
+## Field loop (Commits B1 and B2)
 
-After the active region is built, the **field loop** runs a few settling steps on
-that small working set. It is wrapped as one `FieldLoop` `nn.Module` so PyTorch
-can find, train, and save all field weights together.
+After the active region is built, the **field loop** is where the small active
+memory set is allowed to change over a few settling steps. This is not the same
+as running attention over the whole sentence. The loop applies pressures and
+relation constraints, then updates trace strengths and basin pressures a little
+at a time until the local field state settles.
 
-Inside `FieldLoop`, these submodules are registered by name:
+Commit B1 wrapped this in one PyTorch module called `FieldLoop`. Before B1, field pieces could exist as plain Python objects sitting next to the model. They would run during`forward`, but their weights would not show up in `model.parameters()`, so training would skip them and checkpoints would silently drop them. B1 fixes that by attaching every field piece as a named child of `FieldLoop`.
 
-- `context_op` — cue summary pushes on traces and basins (not token attention)
-- `binding_layer` — soft edges between active traces (constraints, not value mixing)
-- `binding_forces` — turns those edges into forces
-- `interference_layer` — binding-gated compatibility / conflict terms
-- `settling` — damped update of trace amplitudes and basin pressures
+Those children live in `lmf/core/field/loop.py` and are assigned on `self` so
+their names are stable:
 
-`lmf/core/field/loop.py` owns them as `self.context_op`, `self.binding_layer`, etc.
-That fixes the case where field code existed but optimizers skipped it because
-parameters were not part of `model.parameters()`.
+- `context_op` in `context_op.py` — turns the pooled cue into drive on active
+  traces and basins, plus a small threshold shift. It does not mix token vectors.
+- `binding_layer` in `binding.py` — scores soft edges between active traces and
+  returns a sparse binding state. Edges are constraints, not copied content.
+- `binding_forces` in `binding_forces.py` — converts binding edges into forces on
+  traces and basins. Again, no value mixing like attention.
+- `interference_layer` in `interference.py` — adds binding-gated compatibility
+  and conflict terms that feed the same force picture.
+- `settling` in `settling.py` — applies the damped update: propose a new strength
+  from the current state plus force, then blend old and new so the step stays
+  bounded.
+
+Each step of the loop runs context pressure, binding, binding forces,
+interference, and settling. Only the active traces from routing are touched; the
+rest of the trace bank stays idle. This is still an early Stage 1 version of the
+field: binding and interference will grow richer in later plan commits, but the
+wiring and training path are real.
+
+You can inspect the full text-to-field path from the command line. The script
+builds cues, routes into an active region, runs settling, and prints shapes.
+Add `--trace` to see per-step logs on stderr.
 
 ```powershell
 py lmf/core/field/loop.py text "Help bank!" --top-k 8 --cue-dim 16 --settling-steps 3 --trace
 ```
 
-Registration and checkpoint tests for B2 live in `tests/test_field_loop_registration.py`.
-They check that `binding_layer`, `binding_forces`, and `interference_layer` appear in
-`named_parameters` and `state_dict`, survive `torch.save` / `torch.load`, and stay
-attached when `FieldLoop` is nested inside a parent model.
+Commit B2 adds tests that make the B1 wiring hard to break by accident. The
+problem B2 guards against is subtle: code can look correct in a forward pass while
+still failing as a trainable model. If `binding_layer` were constructed but never
+assigned to `self.binding_layer`, PyTorch would not list its weights under
+`FieldLoop`. Training would appear to run, but binding would never learn. The same
+failure happens if weights are not written into `state_dict` when you save a
+checkpoint.
+
+The B2 tests live in `tests/test_field_loop_registration.py`. They require that
+`binding_layer`, `binding_forces`, and `interference_layer` each contribute at
+least one entry to `named_parameters` and `state_dict` with the expected name
+prefix. They also save the full `state_dict` to an in-memory checkpoint, reload
+it into a fresh `FieldLoop`, and assert every tensor matches. A separate test
+puts `FieldLoop` inside a parent `nn.Module`, because the real trainer will own
+field code as `model.field_loop`, not as a loose global. That test checks
+checkpoint keys like `field_loop.binding_forces.*` survive the round trip.
+
+General field behavior tests (forward pass, gradients, CLI) stay in
+`tests/test_field_loop.py`. Run the registration suite when you change how
+modules are constructed or nested.
 
 ```powershell
 py -m pytest tests/test_field_loop_registration.py -q
+py -m pytest tests/test_field_loop.py -q
+```
+
+## Module diagnostics (Commit B3)
+
+B1 made field modules trainable. B2 proved they are registered and checkpointed.
+B3 adds **visibility during training**: after a backward pass, log whether each major
+block actually received gradients and how many learnable weights it owns.
+
+Without this, a silent wiring bug looks like “training runs” while binding or
+interference never updates. Gradient norm zero (or missing) is an early warning.
+Parameter counts help catch empty submodules or accidental duplication.
+
+`lmf/training/module_diagnostics.py` collects a `ModuleDiagnosticReport` with the
+plan’s fields: `trace_bank_grad_norm`, `binding_layer_grad_norm`,
+`binding_forces_grad_norm`, `interference_grad_norm`, `basin_grad_norm`,
+`decoder_grad_norm`, plus `field_loop_param_count`, `binding_param_count`, and
+`interference_param_count`. Modules are found by dotted paths on the model
+(for example `field_loop.binding_layer`), so the same helper works when
+`FieldLoop` is nested under a parent `nn.Module`. Missing modules log as `n/a`.
+
+`log_module_diagnostics(model, step=...)` writes one human-readable INFO line.
+`format_module_diagnostics(report)` returns the same text for stdout. The CLI
+runs a tiny forward/backward on text, then prints the report so you can verify
+logging without a full trainer run.
+
+```powershell
+py lmf/training/module_diagnostics.py text "Help bank!" --top-k 8 --cue-dim 16 --trace
+py -m pytest tests/test_module_diagnostics.py -q
 ```
