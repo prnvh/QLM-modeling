@@ -405,7 +405,7 @@ py lmf/training/binding_edge_evaluator.py
 py lmf/training/binding_edge_evaluator.py text "Help me withdraw money from the bank" --top-k 16
 
 # Automated tests (scorer, stack, evaluator, overfit)
-py -m pytest tests/test_binding_edge_evaluator.py -q
+py -m pytest tests/test_binding_edge_evaluator.py tests/test_binding_overfit.py -q
 ```
 
 Code:
@@ -415,3 +415,40 @@ Code:
 - `lmf/training/train_binding_edges.py` — training CLI
 - `lmf/training/binding_edges.py` — answer key loader + position resolution
 - `lmf/core/field/binding_pair_scorer.py` — C2 pair scorer
+
+## Binding overfit sanity (Commit C5)
+
+Before trusting binding training on real sentences, we need proof the stack can
+actually learn labeled edges end-to-end — not just print tables on random weights.
+
+C5 runs a **controlled overfit experiment** on a tiny synthetic dataset (two
+short sentences, present-present positive and negative pairs). It trains the full
+binding stack twice:
+
+1. **Full** — binding layer learns along with cues, trace bank, router, and context.
+2. **No binding** — binding layer stays frozen at init; everything else still trains.
+
+After training, four gates must pass:
+
+- `binding_edge_accuracy >= 0.90`
+- `positive_binding_mass_mean >= 0.70`
+- `negative_binding_mass_mean <= 0.20`
+- full accuracy **beats** no-binding accuracy
+
+If full passes and no-binding fails, binding supervision is real — the learned
+pair scorer is doing work, not accidental routing noise.
+
+An adversarial test also checks that an **untrained** stack fails the same gates,
+so the test cannot pass by default.
+
+Run manually:
+
+```powershell
+py lmf/training/binding_overfit.py --trace
+py -m pytest tests/test_binding_overfit.py -q
+```
+
+Add `--trace` to see step-by-step training logs on stderr. Exit code 1 means a
+gate failed and the printed report lists which one.
+
+Code: `lmf/training/binding_overfit.py`, tests in `tests/test_binding_overfit.py`.

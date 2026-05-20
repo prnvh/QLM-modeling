@@ -31,3 +31,8 @@ namespaces = true
 
 [tool.setuptools.package-data]
 lmf = ["infra/config/*.yaml"]
+
+[tool.pytest.ini_options]
+markers = [
+  "slow: long-running training or overfit sanity checks",
+]
