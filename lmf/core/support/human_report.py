@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import torch
 from torch import Tensor
@@ -10,6 +11,9 @@ from torch import Tensor
 from lmf.core.field.types import FieldLoopOutput
 from lmf.core.state.types import BindingState, InterferenceState
 from lmf.core.dmf.cue_provenance import format_cue_type_label
+
+if TYPE_CHECKING:
+    from lmf.core.decode.readout_channels import ReadoutChannelInspection
 
 
 @dataclass
@@ -35,6 +39,7 @@ class PipelineInspection:
     normalized_cue_ids: list[int] | None = None
     field_output: FieldLoopOutput | None = None
     activations_after: list[float] | None = None
+    readout_inspection: ReadoutChannelInspection | None = None
 
 
 def format_header(title: str) -> str:
@@ -195,6 +200,12 @@ def format_settling_section(
     return "\n".join(lines)
 
 
+def format_readout_channels_section(inspection: ReadoutChannelInspection) -> str:
+    from lmf.core.decode.readout_channels import format_readout_channels_report
+
+    return format_readout_channels_report(inspection)
+
+
 def format_pipeline_report(inspection: PipelineInspection) -> str:
     """Build the full readable report."""
 
@@ -228,6 +239,9 @@ def format_pipeline_report(inspection: PipelineInspection) -> str:
                 else None,
             )
         )
+
+    if inspection.readout_inspection is not None:
+        sections.append(format_readout_channels_section(inspection.readout_inspection))
 
     return "\n".join(sections)
 
@@ -317,6 +331,7 @@ def tensors_to_ranked_lists(
 __all__ = [
     "PipelineInspection",
     "format_pipeline_report",
+    "format_readout_channels_section",
     "format_routing_section",
     "resolve_source_tokens",
     "tensors_to_ranked_lists",

@@ -17,7 +17,8 @@ text
         binding forces (trace forces + basin forces)
         interference
         settling on trace amps and basin pressures
-  → (future) lucidity, decoder
+  → (future) lucidity
+  → readout channels (E1) + decoder fusion (E2/E3)
 ```
 
 Binding **training** (`BindingStack`) runs cue → router → context → binding only.
@@ -32,6 +33,8 @@ It does not run the full field loop or basin settling yet.
 | Field loop | `lmf/core/field/loop.py` | `tests/test_field_loop.py`, `tests/test_field_loop_registration.py` |
 | Basins | `lmf/core/basin/` | `tests/test_basin_contract.py`, `tests/test_pair_basin_support.py`, `tests/test_binding_forces_d1.py`, `tests/test_basin_family_contrastive.py` |
 | Binding training | `lmf/training/binding_stack.py` | `tests/test_binding_edge_evaluator.py`, `tests/test_binding_overfit.py` |
+| Readout channels | `lmf/core/decode/readout_channels.py` | `tests/test_readout_channels.py` |
+| Decoder | `lmf/core/decode/decoder.py` | `tests/test_decoder.py` |
 
 Recommended end-to-end inspection:
 
@@ -310,9 +313,11 @@ py -m pytest tests/test_basin_family_contrastive.py -q
 
 ### What basins do not do yet
 
-- No decoder readout from `basin_pressures` or `vectors`
 - `basin_bank.vectors` are not read in the force path (pressures carry the dynamics today)
 - `BindingStack` training does not run basin settling (use `BasinFieldStack` for D3)
+
+Basin **readout** is available via the basin readout channel (E1) and D3 attractor
+state; full decoder training is E2/E3.
 
 ### Verify
 
@@ -321,6 +326,45 @@ py lmf/core/basin/basin_bank.py inspect --num-basins 12 --trace
 py lmf/core/basin/pair_basin_support.py inspect --content-dim 8 --num-basins 12 --trace
 py -m pytest tests/test_basin_contract.py tests/test_basin_family_contrastive.py -q
 ```
+
+---
+
+## Readout channels (Commit E1)
+
+After the field loop settles, the system builds a **`CognitiveState`** packet
+(cue packet, settled active region, basin state, binding, interference, optional
+lucidity, and `context_summary` from `ContextOp`). **Readout channels** project
+that packet into six separate latent views — the decoder must not read raw token
+embeddings directly.
+
+| Channel | Substrate | What it encodes |
+|---------|-----------|-----------------|
+| trace | amplitude-weighted active trace contents | sparse trace superposition |
+| binding | strength-weighted bound-pair edge features | soft relational wiring |
+| basin | `pressures @ basin_bank.vectors` (normalized) | attractor / relationship geometry |
+| interference | compat, local, contradiction scalars | energy-state conflict/coherence |
+| lucidity | score, stability, ambiguity | metacognitive diagnostics (optional) |
+| context | `ContextOp.context_summary` in meta | prompt-level pressure, not raw cues |
+
+The **binding channel** reuses the same sparse edge gather path as D2 basins:
+for each binding edge it builds
+`[trace_i, trace_j, trace_i ⊙ trace_j, embed(relation_r), strength]`, weights by
+soft binding strength, and aggregates. This keeps binding readout aligned with
+trainable soft binding rather than a centrality shortcut.
+
+Each channel has its own MLP projector to a shared `channel_dim`. Raw features
+and projected vectors can be stored on `CognitiveState.meta` via
+`attach_readout_channels`. Human-readable inspection is available from the CLI
+and from the end-to-end pipeline script (section **5) READOUT CHANNELS**).
+
+```powershell
+py lmf/core/decode/readout_channels.py text "Help me withdraw money from the bank" --trace
+py lmf/infra/scripts/inspect_pipeline.py text "Help me withdraw money from the bank"
+py -m pytest tests/test_readout_channels.py -q
+```
+
+Decoder fusion (channel scales, dropout, ablations) lives in
+`lmf/core/decode/decoder.py` (E2/E3).
 
 ---
 

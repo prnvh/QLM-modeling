@@ -22,6 +22,7 @@ def test_format_pipeline_report_lists_active_traces_in_plain_language() -> None:
     assert "bank" in report
     assert "BINDING" in report
     assert "SETTLING" in report
+    assert "READOUT CHANNELS" in report
 
 
 def test_inspect_pipeline_cli_prints_readable_sections() -> None:

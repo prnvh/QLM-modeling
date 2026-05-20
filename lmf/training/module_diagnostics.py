@@ -17,9 +17,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from lmf.core.decode.decoder import CognitiveStateDecoder, DecoderConfig  # noqa: E402
 from lmf.core.dmf.trace_bank import TraceBank, TraceBankConfig  # noqa: E402
 from lmf.core.dmf.trace_router import route_text  # noqa: E402
+from lmf.core.field.context_op import ContextOp, ContextOpConfig  # noqa: E402
 from lmf.core.field.loop import FieldLoop, FieldLoopConfig  # noqa: E402
+from lmf.core.state.cognitive_state import build_cognitive_state_from_field_loop  # noqa: E402
 
 LOGGER = logging.getLogger(__name__)
 
@@ -183,7 +186,16 @@ class Stage1DiagnosticModel(nn.Module):
                 settling_steps=settling_steps,
             )
         )
-        self.decoder = nn.Linear(cue_dim, cue_dim)
+        self.context_op = ContextOp(
+            ContextOpConfig(
+                cue_dim=cue_dim,
+                active_traces=top_k,
+                num_basins=num_basins,
+            )
+        )
+        self.decoder = CognitiveStateDecoder(
+            DecoderConfig(content_dim=cue_dim, readout_dim=cue_dim)
+        )
 
     def forward_from_routed(
         self,
@@ -194,13 +206,16 @@ class Stage1DiagnosticModel(nn.Module):
             active_region.trace_amp.shape[0],
             device=active_region.trace_amp.device,
         )
+        context = self.context_op(cue_packet, active_region)
         field_output = self.field_loop(cue_packet, active_region, basin_state)
-        pooled = cue_packet.pooled
-        if pooled is None:
-            pooled = cue_packet.cues.mean(dim=1)
-        if pooled.dim() == 1:
-            pooled = pooled.unsqueeze(0)
-        decoded = self.decoder(pooled)
+        cognitive_state = build_cognitive_state_from_field_loop(
+            cue_packet=cue_packet,
+            active_region=active_region,
+            basin_state=basin_state,
+            field_output=field_output,
+            context_summary=context.context_summary,
+        )
+        decoded = self.decoder(cognitive_state).readout
         return field_output, decoded
 
 

@@ -13,11 +13,18 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from lmf.core.dmf.trace_router import route_text  # noqa: E402
+from lmf.core.decode.readout_channels import (  # noqa: E402
+    ReadoutChannels,
+    ReadoutChannelsConfig,
+    inspect_readout_channels_on_state,
+)
+from lmf.core.field.context_op import ContextOp, ContextOpConfig  # noqa: E402
 from lmf.core.field.loop import (  # noqa: E402
     FieldLoop,
     FieldLoopConfig,
 )
 from lmf.core.input.tokenizer import inspect_text  # noqa: E402
+from lmf.core.state.cognitive_state import build_cognitive_state_from_field_loop  # noqa: E402
 from lmf.core.support.human_report import (  # noqa: E402
     PipelineInspection,
     format_pipeline_report,
@@ -67,6 +74,7 @@ def inspect_pipeline(
 
     field_output = None
     activations_after = None
+    readout_inspection = None
     if run_field:
         field_loop = FieldLoop(
             FieldLoopConfig(
@@ -77,13 +85,37 @@ def inspect_pipeline(
                 settling_steps=settling_steps,
             )
         )
+        context_op = ContextOp(
+            ContextOpConfig(
+                cue_dim=cue_dim,
+                active_traces=top_k,
+                num_basins=num_basins,
+            )
+        )
+        readout_channels = ReadoutChannels(
+            ReadoutChannelsConfig(content_dim=cue_dim, channel_dim=cue_dim)
+        )
         basin_state = field_loop.make_basin_state(
             active_region.trace_amp.shape[0],
             device=active_region.trace_amp.device,
         )
         field_loop.eval()
+        context_op.eval()
         with torch.no_grad():
+            context = context_op(cue_packet, active_region)
             field_output = field_loop(cue_packet, active_region, basin_state)
+            cognitive_state = build_cognitive_state_from_field_loop(
+                cue_packet=cue_packet,
+                active_region=active_region,
+                basin_state=basin_state,
+                field_output=field_output,
+                context_summary=context.context_summary,
+            )
+            _bundle, readout_inspection = inspect_readout_channels_on_state(
+                cognitive_state,
+                readout_channels,
+                input_text=text,
+            )
 
         after_by_id = {
             int(routing.trace_ids[0, index].item()): float(
@@ -119,6 +151,7 @@ def inspect_pipeline(
         normalized_cue_ids=normalized,
         field_output=field_output,
         activations_after=activations_after,
+        readout_inspection=readout_inspection,
     )
 
 
