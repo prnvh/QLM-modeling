@@ -30,7 +30,7 @@ It does not run the full field loop or basin settling yet.
 | Trace bank / router | `lmf/core/dmf/` | `tests/test_trace_bank.py`, `tests/test_trace_router.py` |
 | Cue provenance | `lmf/core/dmf/cue_provenance.py` | `tests/test_cue_provenance.py` |
 | Field loop | `lmf/core/field/loop.py` | `tests/test_field_loop.py`, `tests/test_field_loop_registration.py` |
-| Basins | `lmf/core/basin/` | `tests/test_basin_contract.py`, `tests/test_pair_basin_support.py`, `tests/test_binding_forces_d1.py` |
+| Basins | `lmf/core/basin/` | `tests/test_basin_contract.py`, `tests/test_pair_basin_support.py`, `tests/test_binding_forces_d1.py`, `tests/test_basin_family_contrastive.py` |
 | Binding training | `lmf/training/binding_stack.py` | `tests/test_binding_edge_evaluator.py`, `tests/test_binding_overfit.py` |
 
 Recommended end-to-end inspection:
@@ -261,23 +261,65 @@ lmf/core/basin/
   basin_bank.py       # learnable vectors, batch_state(), CLI inspect
   binding_edges.py    # validate_binding_state, gather_binding_edge_batch
   pair_basin_support.py
-  basin_forces.py     # BasinForceComposer (D1 formula + D2 module)
-  emergence.py        # stub (future attractor dynamics)
+  basin_forces.py           # BasinForceComposer (D1 formula + D2 module)
+  basin_family_contrastive.py
+  emergence.py              # stub (future attractor dynamics)
+```
+
+### Basin-family contrastive (Commit D3)
+
+Families are **weak sentence-level supervision** (e.g. `financial-bank`, `river-bank`),
+not hand-assigned basin slot meanings. The loss pulls **attractor state** together
+or apart — not a separate embedding head.
+
+**Attractor readout** (`compute_basin_attractor_state`):
+
+```text
+state = normalize(basin_pressures @ basin_bank.vectors)   # [batch, basin_dim]
+```
+
+Gradients flow into **settled pressures** (field loop, binding, D1/D2) and
+**`basin_bank.vectors`**. No auxiliary MLP on pressures alone.
+
+**Data:** `data/stage1/basin_families.jsonl` (≥2 examples per family).
+
+**Training path** (`lmf/training/basin_field_stack.py`):
+
+1. CueEncoder → TraceBank → TraceRouter (C1 provenance)
+2. `FieldLoop` → `basin_pressures`
+3. Contrastive on `pressures @ basin_bank.vectors` (weight **0.05** in yaml)
+
+**Causal ablations** (`basin_family_overfit.py`, same trained weights, eval only):
+
+- `bound_pair_to_basin_scale = 0` must **lower** separation margin vs full
+- **Permuted** `basin_bank.vectors` at readout must **lower** margin vs aligned vectors
+
+Proves the loss is tied to **bound-pair field path + learned attractor bank**, not a detached readout trick.
+
+**Alignment note:** family strings are still human-curated labels (like C3 edges).
+They nudge **geometry**, not define slot ontology. Interference-on-basins (F/L)
+remains future work — see `llm/KNOWN_ISSUES.md`.
+
+```powershell
+py lmf/training/basin_family_evaluator.py
+py lmf/training/train_basin_families.py --steps 300 --trace
+py lmf/training/basin_family_overfit.py --trace
+py lmf/core/basin/basin_family_contrastive.py inspect --basin-dim 16 --trace
+py -m pytest tests/test_basin_family_contrastive.py -q
 ```
 
 ### What basins do not do yet
 
 - No decoder readout from `basin_pressures` or `vectors`
 - `basin_bank.vectors` are not read in the force path (pressures carry the dynamics today)
-- No D3 basin-family contrastive loss
-- `BindingStack` training does not run basin settling
+- `BindingStack` training does not run basin settling (use `BasinFieldStack` for D3)
 
 ### Verify
 
 ```powershell
 py lmf/core/basin/basin_bank.py inspect --num-basins 12 --trace
 py lmf/core/basin/pair_basin_support.py inspect --content-dim 8 --num-basins 12 --trace
-py -m pytest tests/test_basin_contract.py tests/test_pair_basin_support.py tests/test_binding_forces_d1.py -q
+py -m pytest tests/test_basin_contract.py tests/test_basin_family_contrastive.py -q
 ```
 
 ---

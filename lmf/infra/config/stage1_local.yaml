@@ -27,3 +27,4 @@ training:
     reconstruction: 1.0
     sparsity: 0.01
     stability: 0.05
+    basin_family_contrastive: 0.05

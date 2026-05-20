@@ -4,6 +4,12 @@ from lmf.core.basin.basin_bank import BasinBank, BasinBankConfig
 from lmf.core.basin.basin_forces import BasinForceBreakdown, BasinForceComposer, BasinForceComposerConfig
 from lmf.core.basin.basin_state import BasinStateSpec, make_basin_state, validate_basin_state
 from lmf.core.basin.binding_edges import BindingEdgeBatch, gather_binding_edge_batch, validate_binding_state
+from lmf.core.basin.basin_family_contrastive import (
+    BasinFamilyContrastive,
+    BasinFamilyContrastiveConfig,
+    BasinFamilyContrastiveMetrics,
+    compute_basin_attractor_state,
+)
 from lmf.core.basin.pair_basin_support import PairDerivedBasinSupport, PairDerivedBasinSupportConfig
 
 __all__ = [
@@ -12,6 +18,10 @@ __all__ = [
     "BasinForceBreakdown",
     "BasinForceComposer",
     "BasinForceComposerConfig",
+    "BasinFamilyContrastive",
+    "BasinFamilyContrastiveConfig",
+    "BasinFamilyContrastiveMetrics",
+    "compute_basin_attractor_state",
     "BasinStateSpec",
     "BindingEdgeBatch",
     "PairDerivedBasinSupport",
