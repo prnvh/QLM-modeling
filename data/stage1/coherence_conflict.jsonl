@@ -1,0 +1,6 @@
+{"text_a": "I deposited cash at the bank after lunch", "text_b": "The atm approved my withdrawal at the bank", "label": 1}
+{"text_a": "I deposited cash at the bank after lunch", "text_b": "We fished along the muddy river bank", "label": 0}
+{"text_a": "Please help me learn algebra this week", "text_b": "Can you help her learn the basics", "label": 1}
+{"text_a": "Please help me learn algebra this week", "text_b": "Please help me do the dishes now", "label": 0}
+{"text_a": "Help me withdraw money from the bank", "text_b": "Help me avoid withdrawing money", "label": 0}
+{"text_a": "Help me withdraw money from the bank", "text_b": "I need to withdraw cash from the atm", "label": 1}

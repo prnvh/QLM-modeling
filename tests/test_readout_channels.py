@@ -87,7 +87,7 @@ def test_extract_channel_features_returns_all_views() -> None:
     assert set(features.as_dict()) == set(READOUT_CHANNEL_NAMES)
     assert features.trace.shape == (1, 6)
     assert features.binding.shape == (1, module.config.binding_feature_dim)
-    assert features.interference.shape == (1, 3)
+    assert features.interference.shape == (1, 6)
     assert features.context.shape == (1, 6)
 
 

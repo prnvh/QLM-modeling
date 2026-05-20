@@ -15,7 +15,7 @@ text
         context pressure
         binding layer (C2 pair scorer → sparse edges)
         binding forces (trace forces + basin forces)
-        interference
+        interference (trace drive + basin competition)
         settling on trace amps and basin pressures
   → (future) lucidity
   → readout channels (E1) + decoder fusion (E2/E3)
@@ -31,6 +31,7 @@ It does not run the full field loop or basin settling yet.
 | Trace bank / router | `lmf/core/dmf/` | `tests/test_trace_bank.py`, `tests/test_trace_router.py` |
 | Cue provenance | `lmf/core/dmf/cue_provenance.py` | `tests/test_cue_provenance.py` |
 | Field loop | `lmf/core/field/loop.py` | `tests/test_field_loop.py`, `tests/test_field_loop_registration.py` |
+| Interference | `lmf/core/field/interference.py` | `tests/test_interference.py` |
 | Basins | `lmf/core/basin/` | `tests/test_basin_contract.py`, `tests/test_pair_basin_support.py`, `tests/test_binding_forces_d1.py`, `tests/test_basin_family_contrastive.py` |
 | Binding training | `lmf/training/binding_stack.py` | `tests/test_binding_edge_evaluator.py`, `tests/test_binding_overfit.py` |
 | Readout channels | `lmf/core/decode/readout_channels.py` | `tests/test_readout_channels.py` |
@@ -166,7 +167,7 @@ This is local dynamics on a small active set, not global sentence attention.
 | `binding_layer` | C2 scorer → sparse `BindingState` |
 | `binding_forces` | Edge scatter forces on traces; **basin force** via `BasinForceComposer` |
 | `basin_bank` | Learnable attractor vectors for all basin slots |
-| `interference_layer` | Binding-gated compatibility / conflict (mostly trace drive today) |
+| `interference_layer` | Binding-gated trace energy + **basin competition** forces (Commit F) |
 | `settling` | Damped update: bounded blend of current state and force |
 
 B1 requires every piece to be `self.<name>` so weights appear in `parameters()`
@@ -181,8 +182,22 @@ binding      = binding_layer(active_region, basin_state, context)
 forces       = binding_forces(active_region, basin_state, binding, context)
 interference = interference_layer(active_region, binding, basin_state)
 
-trace_amp       = settling(trace_amp, trace_forces + context.trace_drive + …)
-basin_pressures = settling(basin_pressures, forces.basin_force + context.basin_drive)
+trace_amp       = settling(trace_amp, trace_forces + context.trace_drive + interference_trace)
+basin_pressures = settling(basin_pressures, forces.basin_force + context.basin_drive + interference_basin)
+```
+
+### Interference (Commit F)
+
+Interference is binding-gated energy on **traces and basins**. Basin competition uses
+co-activated pressures and cosine similarity of learnable basin vectors to derive
+support, conflict, coexistence, and suppression forces. See `lmf/core/field/interference.py`.
+
+F2 hook: `lmf/training/coherence_conflict.py` (default loss weight **0.01**).
+
+```powershell
+py lmf/core/field/interference.py text "Help me withdraw money from the bank" --trace
+py lmf/training/coherence_conflict.py
+py -m pytest tests/test_interference.py -q
 ```
 
 ### Basin state for the loop

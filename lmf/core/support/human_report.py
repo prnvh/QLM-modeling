@@ -193,10 +193,16 @@ def format_settling_section(
     if interference_state is not None:
         pair_energy = interference_state.pair_energy
         contradiction = interference_state.contradiction
+        conflict_score = interference_state.conflict_score
+        coexistence_score = interference_state.coexistence_score
         if pair_energy is not None and contradiction is not None:
             pe = float(pair_energy[0].item())
             ct = float(contradiction[0].item())
             lines.append(f"interference  compat={pe:.3f}  conflict={ct:.3f}")
+        if conflict_score is not None and coexistence_score is not None:
+            cs = float(conflict_score[0].item())
+            xs = float(coexistence_score[0].item())
+            lines.append(f"basin competition  conflict_score={cs:.3f}  coexistence={xs:.3f}")
     return "\n".join(lines)
 
 

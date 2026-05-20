@@ -48,11 +48,18 @@ class BindingState:
 
 @dataclass
 class InterferenceState:
-    """Compatibility / conflict terms feeding the energy, typically binding-gated."""
+    """Compatibility / conflict terms feeding trace and basin field dynamics."""
 
     pair_energy: Tensor | None = None
     local_energy: Tensor | None = None
     contradiction: Tensor | None = None
+    basin_support_force: Tensor | None = None
+    basin_conflict_force: Tensor | None = None
+    basin_coexistence_force: Tensor | None = None
+    basin_suppression_force: Tensor | None = None
+    conflict_score: Tensor | None = None
+    coexistence_score: Tensor | None = None
+    interference_pressure: Tensor | None = None
 
 
 @dataclass

@@ -235,7 +235,7 @@ def extract_interference_features(state: CognitiveState, *, device: torch.device
     batch_size = state.active_region.trace_amp.shape[0]
     dtype = state.active_region.trace_content.dtype
     if interference is None:
-        return torch.zeros(batch_size, 3, device=device, dtype=dtype)
+        return torch.zeros(batch_size, 6, device=device, dtype=dtype)
 
     def _scalar(value: Tensor | None) -> Tensor:
         if value is None:
@@ -249,6 +249,9 @@ def extract_interference_features(state: CognitiveState, *, device: torch.device
             _scalar(interference.pair_energy),
             _scalar(interference.local_energy),
             _scalar(interference.contradiction),
+            _scalar(interference.conflict_score),
+            _scalar(interference.coexistence_score),
+            _scalar(interference.interference_pressure),
         ],
         dim=-1,
     )
@@ -341,7 +344,7 @@ class ReadoutChannels(nn.Module):
         self.trace_projector = _ChannelProjector(config.content_dim, hidden, config.channel_dim)
         self.binding_projector = _ChannelProjector(config.binding_feature_dim, hidden, config.channel_dim)
         self.basin_projector = _ChannelProjector(config.content_dim, hidden, config.channel_dim)
-        self.interference_projector = _ChannelProjector(3, hidden, config.channel_dim)
+        self.interference_projector = _ChannelProjector(6, hidden, config.channel_dim)
         self.lucidity_projector = _ChannelProjector(3, hidden, config.channel_dim)
         self.context_projector = _ChannelProjector(config.content_dim, hidden, config.channel_dim)
 

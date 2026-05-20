@@ -17,6 +17,10 @@ model:
   settling_steps: 3
   direct_trace_to_basin_scale: 0.2
   bound_pair_to_basin_scale: 1.0
+  interference_support_scale: 0.5
+  interference_conflict_scale: 1.0
+  interference_coexistence_scale: 0.35
+  interference_suppression_scale: 0.5
 
 decoder:
   trace_channel_scale: 0.7
@@ -43,3 +47,4 @@ training:
     sparsity: 0.01
     stability: 0.05
     basin_family_contrastive: 0.05
+    coherence_conflict: 0.01

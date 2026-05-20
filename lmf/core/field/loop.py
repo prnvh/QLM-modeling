@@ -21,7 +21,7 @@ from lmf.core.dmf.trace_router import route_text  # noqa: E402
 from lmf.core.field.binding import BindingLayer, BindingLayerConfig  # noqa: E402
 from lmf.core.field.binding_forces import BindingForcesConfig, BindingForcesModule  # noqa: E402
 from lmf.core.field.context_op import ContextOp, ContextOpConfig  # noqa: E402
-from lmf.core.field.interference import InterferenceLayer, InterferenceLayerConfig  # noqa: E402
+from lmf.core.field.interference import InterferenceLayer, InterferenceLayerConfig, compose_basin_interference_force  # noqa: E402
 from lmf.core.field.settling import Settling, SettlingConfig  # noqa: E402
 from lmf.core.field.types import FieldLoopOutput  # noqa: E402
 from lmf.core.input.cue_packet import CuePacket  # noqa: E402
@@ -122,7 +122,11 @@ class FieldLoop(nn.Module):
             )
         )
         self.interference_layer = InterferenceLayer(
-            InterferenceLayerConfig(content_dim=config.content_dim)
+            InterferenceLayerConfig(
+                content_dim=config.content_dim,
+                num_basins=config.num_basins,
+                trace=config.trace,
+            )
         )
         self.settling = Settling(SettlingConfig())
 
@@ -150,7 +154,8 @@ class FieldLoop(nn.Module):
             context = self.context_op(cue_packet, step_region)
             binding_state = self.binding_layer(step_region, basin_state, context)
             forces = self.binding_forces(step_region, basin_state, binding_state, context)
-            interference_state = self.interference_layer(step_region, binding_state, basin_state)
+            step_basin_state = replace(basin_state, pressures=basin_pressures)
+            interference_state = self.interference_layer(step_region, binding_state, step_basin_state)
 
             interference_drive = self._interference_trace_drive(
                 interference_state,
@@ -164,7 +169,8 @@ class FieldLoop(nn.Module):
             )
             trace_amp = self.settling(trace_amp, total_trace_force)
 
-            basin_force = forces.basin_force + context.basin_drive
+            basin_interference = compose_basin_interference_force(interference_state)
+            basin_force = forces.basin_force + context.basin_drive + basin_interference
             basin_pressures = self.settling(basin_pressures, basin_force)
 
             _log_trace(
@@ -174,6 +180,10 @@ class FieldLoop(nn.Module):
                 step=step + 1,
                 trace_amp_mean=float(trace_amp.mean().item()),
                 basin_mean=float(basin_pressures.mean().item()),
+                conflict_score=float(interference_state.conflict_score.mean().item())
+                if interference_state.conflict_score is not None
+                else 0.0,
+                basin_interference_mean=float(basin_interference.mean().item()),
             )
 
         if binding_state is None or interference_state is None:
