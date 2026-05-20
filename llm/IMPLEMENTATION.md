@@ -131,8 +131,9 @@ their names are stable:
 
 - `context_op` in `context_op.py` — turns the pooled cue into drive on active
   traces and basins, plus a small threshold shift. It does not mix token vectors.
-- `binding_layer` in `binding.py` — scores soft edges between active traces and
-  returns a sparse binding state. Edges are constraints, not copied content.
+- `binding_layer` in `binding.py` — scores soft edges between active traces using
+  the context-sensitive pair scorer (C2). Returns a sparse binding state. Edges
+  are constraints, not copied content.
 - `binding_forces` in `binding_forces.py` — converts binding edges into forces on
   traces and basins. Again, no value mixing like attention.
 - `interference_layer` in `interference.py` — adds binding-gated compatibility
@@ -247,3 +248,170 @@ Simple verification:
 py lmf/core/dmf/trace_router.py text "Help bank!" --top-k 5 --trace
 py -m pytest tests/test_cue_provenance.py tests/test_trace_router.py -q
 ```
+
+## Context-sensitive binding scorer (Commit C2)
+
+Before C2, binding strength came from a simple trace-content similarity. That
+could not tell apart cases where the same two words mean different things in
+different sentences — "bank" near "money" vs "bank" near "river".
+
+C2 adds a learned **pair scorer** (`lmf/core/field/binding_pair_scorer.py`) that
+scores every active trace pair under every relation type. For each pair it sees:
+
+- both trace contents and their element-wise product and absolute difference
+- a **context summary** vector from the pooled cue (via `ContextPressure`)
+- span distance and cue order from C1 provenance
+- cue type embeddings for both source cues
+
+The scorer outputs sigmoid strengths with shape `[batch, traces, traces,
+relations]`. `BindingLayer` (`binding.py`) calls it, keeps only the top-k edges
+per trace, and passes the sparse result to binding forces and interference.
+
+`ContextOp` now writes `context_summary` onto `ContextPressure` so binding can
+use sentence-level context without mixing token vectors like attention.
+
+This is wired into the field loop and into the end-to-end training stack below.
+Binding is no longer a standalone eval shortcut — it runs on the same active
+region and provenance that routing produces during training.
+
+```powershell
+py -m pytest tests/test_binding_edge_evaluator.py::test_binding_pair_scorer_changes_with_span_distance -q
+py -m pytest tests/test_field_loop.py -q
+```
+
+## Binding edge training and evaluation (Commits C2 + C3)
+
+### What we're trying to teach the model
+
+Read this sentence:
+
+**"Help me withdraw money from the bank"**
+
+Some word pairs belong together in meaning. Others do not.
+
+- **withdraw** and **money** go together (you withdraw money).
+- **help** and **bank** do not really go together in this sentence.
+
+C3 is how we **train and check** whether the model's internal "these two ideas
+are connected" score matches what we know is true — using the full pipeline, not
+a brittle string-matching harness.
+
+### The answer key file
+
+`data/stage1/binding_edges.jsonl`
+
+Each line is one sentence and a list of word pairs we already judged:
+
+```json
+{
+  "text": "Help me withdraw money from the bank",
+  "edges": [
+    {"cue_a": "withdraw", "cue_b": "money", "label": 1},
+    {"cue_a": "help", "cue_b": "bank", "label": 0}
+  ]
+}
+```
+
+- **cue_a** and **cue_b** are two words from that sentence.
+- **label 1** means "these two should connect."
+- **label 0** means "these two should not connect."
+
+Both words must actually appear in the sentence. We do not use pairs like
+`help` + `river` when the sentence never mentions river.
+
+### End-to-end path (not a harness)
+
+The old approach scored pairs with a standalone binding layer and matched words
+by string after the fact. That was brittle: it could pass tests without the real
+routing and provenance path learning anything.
+
+The current stack (`lmf/training/binding_stack.py`) runs the full Stage 1 path:
+
+1. **CueEncoder** — token ids to cue vectors
+2. **TraceBank + TraceRouter** — sparse wake-up with C1 provenance
+3. **ContextOp** — context summary for the pair scorer
+4. **BindingLayer** — C2 context-sensitive pair strengths
+
+Training examples are resolved by **sequence position**, not post-hoc string
+labels. `resolve_example_edges()` maps `cue_a` / `cue_b` to token positions in
+the encoded sequence, then matches active traces whose `source_cue_id` equals
+those positions. Loss is binary cross-entropy on covered edges only.
+
+`BindingStack.from_examples()` builds one shared vocabulary from all training
+sentences so every example uses the same token ids.
+
+### Training
+
+```powershell
+py lmf/training/train_binding_edges.py --steps 200 --trace
+```
+
+This runs Adam over all examples in the answer key file, backpropagating through
+cue encoder, trace bank, router, context op, and binding layer. After training
+it prints the same eval table as the evaluator CLI.
+
+Untrained scores are expected to be poor. After a few hundred steps you should
+see loss drop and accuracy rise on covered pairs — proof the full stack is
+learning, not just a pattern-matching wrapper.
+
+### Reading the printed table
+
+Run:
+
+```powershell
+py lmf/training/binding_edge_evaluator.py text "Help me withdraw money from the bank" --top-k 16
+```
+
+You might see:
+
+```text
+cue_a      cue_b      label   mass   topk   pos_a  pos_b  ok
+withdraw   money          1  0.113  0.722  3      4      no
+money      bank           1  0.657  0.657  4      7     yes
+help       bank           0  0.066  0.066  1      7     yes
+```
+
+Read it like a report card for each word pair:
+
+- **cue_a / cue_b** — the two words being tested.
+- **label** — what we expect: 1 = should connect, 0 = should not.
+- **mass** — binding strength from the C2 scorer (0 = not at all, 1 = very strong).
+- **pos_a / pos_b** — sequence positions used to match traces (provenance-based).
+- **ok** —
+  - **yes** = model agrees with the answer key.
+  - **no** = model disagrees.
+  - **miss** = one or both words never woke a trace. Try larger `--top-k`.
+
+The summary line (loss, acc, pos_mass, neg_mass, pos_cov, neg_cov) aggregates
+across all pairs in the run.
+
+### What this does not solve yet
+
+This stack trains binding on labeled pairs in context. It does **not** yet handle
+double negatives, compositional negation, or interference between competing
+meanings — those need richer data and later field commits. C3 gives an honest
+end-to-end ruler; C2 gives the learnable scorer that ruler measures.
+
+### Commands
+
+```powershell
+# Train on the full answer key
+py lmf/training/train_binding_edges.py --steps 200 --trace
+
+# Evaluate every sentence in the answer key file
+py lmf/training/binding_edge_evaluator.py
+
+# Evaluate one sentence
+py lmf/training/binding_edge_evaluator.py text "Help me withdraw money from the bank" --top-k 16
+
+# Automated tests (scorer, stack, evaluator, overfit)
+py -m pytest tests/test_binding_edge_evaluator.py -q
+```
+
+Code:
+
+- `lmf/training/binding_stack.py` — full trainable forward + loss
+- `lmf/training/binding_edge_evaluator.py` — eval via the same stack
+- `lmf/training/train_binding_edges.py` — training CLI
+- `lmf/training/binding_edges.py` — answer key loader + position resolution
+- `lmf/core/field/binding_pair_scorer.py` — C2 pair scorer

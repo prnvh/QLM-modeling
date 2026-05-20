@@ -14,6 +14,7 @@ class ContextPressure:
     trace_drive: Tensor
     basin_drive: Tensor
     threshold_shift: Tensor
+    context_summary: Tensor
 
 
 @dataclass

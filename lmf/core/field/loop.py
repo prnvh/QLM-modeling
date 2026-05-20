@@ -99,6 +99,7 @@ class FieldLoop(nn.Module):
         self.binding_layer = BindingLayer(
             BindingLayerConfig(
                 content_dim=config.content_dim,
+                context_dim=config.cue_dim,
                 relation_channels=config.relation_channels,
             )
         )

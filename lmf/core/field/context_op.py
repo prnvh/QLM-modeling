@@ -62,6 +62,7 @@ class ContextOp(nn.Module):
             trace_drive=trace_drive,
             basin_drive=basin_drive,
             threshold_shift=threshold_shift,
+            context_summary=summary,
         )
 
     def _resolve_summary(self, cue_packet: CuePacket) -> Tensor:
