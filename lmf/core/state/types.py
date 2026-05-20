@@ -42,6 +42,7 @@ class BindingState:
 
     edge_index: Tensor
     relation_strength: Tensor
+    relation_index: Tensor | None = None
     centrality: Tensor | None = None
 
 

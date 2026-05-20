@@ -19,7 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from lmf.core.dmf.trace_bank import TraceBank, TraceBankConfig  # noqa: E402
 from lmf.core.dmf.trace_router import route_text  # noqa: E402
-from lmf.core.field.loop import FieldLoop, FieldLoopConfig, make_placeholder_basin_state  # noqa: E402
+from lmf.core.field.loop import FieldLoop, FieldLoopConfig  # noqa: E402
 
 LOGGER = logging.getLogger(__name__)
 
@@ -190,12 +190,9 @@ class Stage1DiagnosticModel(nn.Module):
         cue_packet,
         active_region,
     ):
-        basin_state = make_placeholder_basin_state(
-            batch_size=active_region.trace_amp.shape[0],
-            num_basins=self.num_basins,
-            basin_dim=self.cue_dim,
+        basin_state = self.field_loop.make_basin_state(
+            active_region.trace_amp.shape[0],
             device=active_region.trace_amp.device,
-            dtype=active_region.trace_amp.dtype,
         )
         field_output = self.field_loop(cue_packet, active_region, basin_state)
         pooled = cue_packet.pooled

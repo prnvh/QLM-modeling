@@ -5,12 +5,7 @@ import sys
 import pytest
 import torch
 
-from lmf.core.field.loop import (
-    FieldLoop,
-    FieldLoopConfig,
-    make_placeholder_basin_state,
-    run_field_loop_on_text,
-)
+from lmf.core.field.loop import FieldLoop, FieldLoopConfig, run_field_loop_on_text
 from lmf.core.input.cue_packet import CuePacket
 from lmf.core.state.types import ActiveRegion
 
@@ -46,12 +41,9 @@ def test_field_loop_forward_runs_settling_steps() -> None:
     )
     cue_packet = _sample_cue_packet()
     active_region = _sample_active_region()
-    basin_state = make_placeholder_basin_state(
+    basin_state = field_loop.make_basin_state(
         batch_size=2,
-        num_basins=8,
-        basin_dim=6,
         device=active_region.trace_amp.device,
-        dtype=active_region.trace_amp.dtype,
     )
 
     output = field_loop(cue_packet, active_region, basin_state)
@@ -69,12 +61,9 @@ def test_field_loop_forward_supports_gradients() -> None:
     )
     cue_packet = _sample_cue_packet(batch_size=1, cue_dim=4)
     active_region = _sample_active_region(batch_size=1, num_traces=3, dim=4)
-    basin_state = make_placeholder_basin_state(
+    basin_state = field_loop.make_basin_state(
         batch_size=1,
-        num_basins=5,
-        basin_dim=4,
         device=active_region.trace_amp.device,
-        dtype=active_region.trace_amp.dtype,
     )
 
     output = field_loop(cue_packet, active_region, basin_state)
@@ -82,6 +71,7 @@ def test_field_loop_forward_supports_gradients() -> None:
     loss.backward()
 
     assert any(param.grad is not None for param in field_loop.parameters())
+    assert field_loop.binding_forces.basin_composer.pair_basin_support.projection[0].weight.grad is not None
 
 
 def test_field_loop_trace_logs_steps(caplog) -> None:
@@ -99,13 +89,7 @@ def test_field_loop_trace_logs_steps(caplog) -> None:
     field_loop(
         _sample_cue_packet(batch_size=1, cue_dim=4),
         _sample_active_region(batch_size=1, num_traces=3, dim=4),
-        make_placeholder_basin_state(
-            batch_size=1,
-            num_basins=5,
-            basin_dim=4,
-            device=torch.device("cpu"),
-            dtype=torch.float32,
-        ),
+        field_loop.make_basin_state(batch_size=1, device=torch.device("cpu")),
     )
 
     messages = [record.message for record in caplog.records]

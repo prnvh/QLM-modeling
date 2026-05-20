@@ -33,7 +33,12 @@ def _binding_state(*, batch_size: int = 1, num_traces: int = 4, num_edges: int =
         dtype=torch.long,
     ).expand(batch_size, 2, num_edges)
     strengths = torch.tensor([[0.8, 0.5, 0.3]], dtype=torch.float32).expand(batch_size, num_edges)
-    return BindingState(edge_index=edge_index, relation_strength=strengths)
+    relation_index = torch.tensor([[0, 1, 2]], dtype=torch.long).expand(batch_size, num_edges)
+    return BindingState(
+        edge_index=edge_index,
+        relation_strength=strengths,
+        relation_index=relation_index,
+    )
 
 
 def _context(*, batch_size: int = 1, dim: int = 4) -> ContextPressure:
@@ -109,6 +114,7 @@ def test_d1_bound_pair_path_changes_when_edge_strength_changes() -> None:
     weak = BindingState(
         edge_index=strong.edge_index,
         relation_strength=strong.relation_strength * 0.01,
+        relation_index=strong.relation_index,
     )
 
     strong_forces = module(region, basin, strong, ctx)
@@ -118,7 +124,7 @@ def test_d1_bound_pair_path_changes_when_edge_strength_changes() -> None:
 
 
 def test_d1_pair_projection_is_trainable() -> None:
-    module = BindingForcesModule(BindingForcesConfig(num_basins=6, content_dim=4))
+    module = BindingForcesModule(BindingForcesConfig(num_basins=6, content_dim=4, num_relations=4))
     region = _active_region()
     basin = _basin_state()
     binding = _binding_state()
@@ -128,8 +134,8 @@ def test_d1_pair_projection_is_trainable() -> None:
     loss = forces.basin_force.sum()
     loss.backward()
 
-    assert module.pair_basin_projection.weight.grad is not None
-    assert float(module.pair_basin_projection.weight.grad.abs().sum()) > 0.0
+    assert module.pair_basin_support.projection[0].weight.grad is not None
+    assert float(module.pair_basin_support.projection[0].weight.grad.abs().sum()) > 0.0
 
 
 def test_d1_config_rejects_negative_scales() -> None:

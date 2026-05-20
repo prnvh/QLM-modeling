@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor, nn
 
+from lmf.core.basin.binding_edges import validate_binding_state
 from lmf.core.field.binding_pair_scorer import BindingPairScorer, BindingPairScorerConfig
 from lmf.core.field.types import ContextPressure
 from lmf.core.state.types import ActiveRegion, BasinState, BindingState
@@ -79,6 +80,7 @@ class BindingLayer(nn.Module):
         batch_size, num_traces, _dim = content.shape
 
         pair_mass = pair_strength.max(dim=-1).values
+        top_relation = pair_strength.argmax(dim=-1)
         eye = torch.eye(num_traces, device=content.device, dtype=torch.bool)
         pair_mass = pair_mass.masked_fill(eye.unsqueeze(0), float("-inf"))
 
@@ -89,6 +91,8 @@ class BindingLayer(nn.Module):
         src_ids = src_ids.expand(batch_size, num_traces, k_keep).reshape(batch_size, -1)
         dst_ids = top_indices.reshape(batch_size, -1)
         strengths = top_values.reshape(batch_size, -1)
+        batch_ids = torch.arange(batch_size, device=content.device).view(-1, 1).expand_as(src_ids)
+        relation_index = top_relation[batch_ids, src_ids, dst_ids]
 
         valid = torch.isfinite(strengths)
         edge_index = torch.stack([src_ids, dst_ids], dim=1)
@@ -103,11 +107,20 @@ class BindingLayer(nn.Module):
             valid = valid & edge_mask
             relation_strength = relation_strength.masked_fill(~valid, 0.0)
 
-        return BindingState(
+        binding_state = BindingState(
             edge_index=edge_index,
             relation_strength=relation_strength,
+            relation_index=relation_index,
             centrality=centrality,
         )
+        validate_binding_state(
+            binding_state,
+            batch_size=batch_size,
+            num_traces=num_traces,
+            num_relations=self.config.relation_channels,
+            require_relation_index=True,
+        )
+        return binding_state
 
 
 __all__ = ["BindingLayer", "BindingLayerConfig"]

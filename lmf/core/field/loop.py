@@ -15,6 +15,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from lmf.core.basin.basin_bank import BasinBank, BasinBankConfig  # noqa: E402
+from lmf.core.basin.basin_state import BasinStateSpec, make_basin_state, validate_basin_state  # noqa: E402
 from lmf.core.dmf.trace_router import route_text  # noqa: E402
 from lmf.core.field.binding import BindingLayer, BindingLayerConfig  # noqa: E402
 from lmf.core.field.binding_forces import BindingForcesConfig, BindingForcesModule  # noqa: E402
@@ -68,11 +70,14 @@ def make_placeholder_basin_state(
     device: torch.device,
     dtype: torch.dtype,
 ) -> BasinState:
-    """Build a zero basin state for smoke tests before basin_bank exists."""
+    """Build a validated zero-pressure basin state (non-learned vectors)."""
 
-    return BasinState(
-        pressures=torch.zeros(batch_size, num_basins, device=device, dtype=dtype),
-        vectors=torch.zeros(num_basins, basin_dim, device=device, dtype=dtype),
+    return make_basin_state(
+        batch_size=batch_size,
+        num_basins=num_basins,
+        basin_dim=basin_dim,
+        device=device,
+        dtype=dtype,
     )
 
 
@@ -107,6 +112,13 @@ class FieldLoop(nn.Module):
             BindingForcesConfig(
                 num_basins=config.num_basins,
                 content_dim=config.content_dim,
+                num_relations=config.relation_channels,
+            )
+        )
+        self.basin_bank = BasinBank(
+            BasinBankConfig(
+                num_basins=config.num_basins,
+                basin_dim=config.content_dim,
             )
         )
         self.interference_layer = InterferenceLayer(
@@ -125,6 +137,8 @@ class FieldLoop(nn.Module):
         """Run context → binding → forces → interference → settling for K steps."""
 
         steps = steps if steps is not None else self.config.settling_steps
+        batch_size = active_region.trace_amp.shape[0]
+        basin_state = self._ensure_basin_state(basin_state, batch_size=batch_size)
         trace_amp = active_region.trace_amp
         basin_pressures = basin_state.pressures
 
@@ -183,6 +197,26 @@ class FieldLoop(nn.Module):
             raise ValueError("interference_state.pair_energy is required.")
         return interference_state.pair_energy.expand(-1, num_traces)
 
+    def _ensure_basin_state(self, basin_state: BasinState, *, batch_size: int) -> BasinState:
+        spec = BasinStateSpec(
+            batch_size=batch_size,
+            num_basins=self.config.num_basins,
+            basin_dim=self.config.content_dim,
+        )
+        validate_basin_state(basin_state, spec=spec)
+        if basin_state.vectors.data_ptr() != self.basin_bank.vectors.data_ptr():
+            if not torch.allclose(basin_state.vectors, self.basin_bank.vectors):
+                raise ValueError(
+                    "basin_state.vectors must match field_loop.basin_bank.vectors; "
+                    "use basin_bank.batch_state() to construct basin state."
+                )
+        return basin_state
+
+    def make_basin_state(self, batch_size: int, *, device: torch.device | None = None) -> BasinState:
+        """Create a batch basin state backed by this loop's learnable basin bank."""
+
+        return self.basin_bank.batch_state(batch_size, device=device)
+
 
 def run_field_loop_on_text(
     text: str,
@@ -205,13 +239,6 @@ def run_field_loop_on_text(
         seed=seed,
         trace=trace,
     )
-    basin_state = make_placeholder_basin_state(
-        batch_size=active_region.trace_amp.shape[0],
-        num_basins=num_basins,
-        basin_dim=cue_dim,
-        device=active_region.trace_amp.device,
-        dtype=active_region.trace_amp.dtype,
-    )
     field_loop = FieldLoop(
         FieldLoopConfig(
             cue_dim=cue_dim,
@@ -221,6 +248,10 @@ def run_field_loop_on_text(
             settling_steps=settling_steps,
             trace=trace,
         )
+    )
+    basin_state = field_loop.make_basin_state(
+        active_region.trace_amp.shape[0],
+        device=active_region.trace_amp.device,
     )
     field_loop.eval()
     with torch.no_grad():

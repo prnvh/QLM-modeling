@@ -16,7 +16,6 @@ from lmf.core.dmf.trace_router import route_text  # noqa: E402
 from lmf.core.field.loop import (  # noqa: E402
     FieldLoop,
     FieldLoopConfig,
-    make_placeholder_basin_state,
 )
 from lmf.core.input.tokenizer import inspect_text  # noqa: E402
 from lmf.core.support.human_report import (  # noqa: E402
@@ -69,13 +68,6 @@ def inspect_pipeline(
     field_output = None
     activations_after = None
     if run_field:
-        basin_state = make_placeholder_basin_state(
-            batch_size=active_region.trace_amp.shape[0],
-            num_basins=num_basins,
-            basin_dim=cue_dim,
-            device=active_region.trace_amp.device,
-            dtype=active_region.trace_amp.dtype,
-        )
         field_loop = FieldLoop(
             FieldLoopConfig(
                 cue_dim=cue_dim,
@@ -84,6 +76,10 @@ def inspect_pipeline(
                 num_basins=num_basins,
                 settling_steps=settling_steps,
             )
+        )
+        basin_state = field_loop.make_basin_state(
+            active_region.trace_amp.shape[0],
+            device=active_region.trace_amp.device,
         )
         field_loop.eval()
         with torch.no_grad():
