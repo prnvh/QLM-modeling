@@ -104,7 +104,10 @@ class FieldLoop(nn.Module):
             )
         )
         self.binding_forces = BindingForcesModule(
-            BindingForcesConfig(num_basins=config.num_basins)
+            BindingForcesConfig(
+                num_basins=config.num_basins,
+                content_dim=config.content_dim,
+            )
         )
         self.interference_layer = InterferenceLayer(
             InterferenceLayerConfig(content_dim=config.content_dim)

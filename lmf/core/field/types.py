@@ -24,6 +24,8 @@ class BindingForces:
     trace_force: Tensor
     basin_force: Tensor
     stability_force: Tensor
+    direct_basin_force: Tensor | None = None
+    bound_pair_basin_force: Tensor | None = None
 
 
 @dataclass

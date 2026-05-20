@@ -182,6 +182,39 @@ py -m pytest tests/test_field_loop_registration.py -q
 py -m pytest tests/test_field_loop.py -q
 ```
 
+## Basin routing through bound pairs (Commit D1)
+
+Before D1, basin pressure came mostly from a weak path: pool active trace
+amplitudes and push that single vector into every basin slot. That treats basins
+like echo chambers of isolated traces, not of **relationships** between traces.
+
+D1 changes the primary route. `BindingForcesModule` now builds basin force as:
+
+```text
+basin_force =
+  direct_trace_to_basin_scale * direct_trace_basin_force
++ bound_pair_to_basin_scale * bound_pair_basin_force
+```
+
+Defaults (also in `lmf/infra/config/stage1_local.yaml`): direct scale `0.2`,
+bound-pair scale `1.0`. The **direct** path still uses masked-mean trace
+amplitudes times a learnable per-basin weight (the old weak signal, down-weighted).
+The **bound-pair** path walks each sparse binding edge, gathers source and
+destination trace content, forms `[src, dst, src*dst]`, projects to basin space,
+weights by binding strength, and sums. No token-token attention and no copying of
+full sentence vectors into basins.
+
+`BindingForces` now exposes `direct_basin_force` and `bound_pair_basin_force` for
+tests and future trace logging. D2 will replace the simple linear pair projection
+with a richer pair-derived basin support module; D1 only wires the two-path
+formula and makes pair edges the main driver.
+
+Verify:
+
+```powershell
+py -m pytest tests/test_binding_forces_d1.py tests/test_field_loop.py -q
+```
+
 ## Module diagnostics (Commit B3)
 
 B1 made field modules trainable. B2 proved they are registered and checkpointed.
